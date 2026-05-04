@@ -11,6 +11,7 @@ import einops
 import numpy as np
 import torch
 from monai.data.image_reader import PILReader
+from PIL import Image
 
 from monai.transforms.spatial.dictionary import ResizeD, SpacingD, OrientationD
 from monai.transforms.intensity.dictionary import ThresholdIntensityD, ScaleIntensityD
@@ -20,6 +21,7 @@ from monai.transforms.utility.array import Lambda
 from monai.transforms.croppad.dictionary import ResizeWithPadOrCropD
 from monai.transforms.compose import Compose
 from skimage.util import random_noise
+from functools import partial
 
 
 def get_resize_transform(
@@ -39,6 +41,38 @@ def get_resize_transform(
     target_size = list(map(lambda x: x / reduction_rate, original_size))
     return ResizeD(keys=keys, spatial_size=target_size, mode=mode, align_corners=True)
 
+# Top-level helper functions so they are picklable by multiprocessing on Windows
+def pil_rotate_90_convert_L(image):
+    # faster/lossless 90° transpose vs. rotate()
+    return image.transpose(Image.ROTATE_90).convert("L")
+
+
+def pil_rotate_90(image):
+    return image.rotate(90)
+
+
+def pil_convert_L(image):
+    return image.convert("L")
+
+
+def repeat_ap(t, k):
+    # t shape expected "1 m n" -> "1 k m n"
+    return einops.repeat(t, "1 m n -> 1 k m n", k=k)
+
+
+def repeat_lat(t, k):
+    # t shape expected "1 m n" -> "1 m n k"
+    return einops.repeat(t, "1 m n -> 1 m n k", k=k)
+
+
+def seg_noise_dict(d):
+    return {
+        "orig": d["seg"],
+        "gaus": torch.tensor(
+            random_noise(d["seg"], mode="gaussian", mean=0, var=0.01, clip=False),
+            dtype=torch.float32,
+        ),
+    }
 
 def get_denoising_autoencoder_transforms(size=64, resolution=1.5):
     """return both noisy and clean version of the segmentation label
@@ -50,15 +84,8 @@ def get_denoising_autoencoder_transforms(size=64, resolution=1.5):
     Returns:
         dict[str,monai.transforms]: ap,lat,seg callable transforms
     """
-    noise_lambda = Lambda(
-        lambda d: {
-            "orig": d["seg"],
-            "gaus": torch.tensor(
-                random_noise(d["seg"], mode="gaussian", mean=0, var=0.01, clip=False),
-                dtype=torch.float32,
-            ),
-        }
-    )
+    # use top-level function instead of local lambda so it's picklable
+    noise_lambda = Lambda(seg_noise_dict)
 
     seg_transform = Compose(
         [
@@ -103,7 +130,7 @@ def get_nonkasten_transforms(size=64, resolution=1.5):
                 dtype=np.float32,
                 simple_keys=True,
                 image_only=False,
-                reader=PILReader(converter=lambda image: image.rotate(90)),
+                reader=PILReader(converter=pil_rotate_90),
             ),
             EnsureChannelFirstD(keys="ap"),
             ResizeD(
@@ -166,7 +193,7 @@ def get_nonkasten_transforms(size=64, resolution=1.5):
 
 
 def get_kasten_transforms(size=64, resolution=1.5):
-    """transform AP/LAT images into 3D volumes by repeating along orthogonal directions"""
+    """transform AP/LAT as 2D tensors; do 2D->3D repeat on GPU in the training loop"""
     ap_transform = Compose(
         [
             LoadImageD(
@@ -174,8 +201,8 @@ def get_kasten_transforms(size=64, resolution=1.5):
                 ensure_channel_first=False,
                 dtype=np.float32,
                 simple_keys=True,
-                image_only=False,
-                reader=PILReader(converter=lambda image: image.rotate(90)),
+                image_only=True,  # no meta needed for 2D AP
+                reader=PILReader(converter=pil_rotate_90_convert_L),
             ),
             EnsureChannelFirstD(keys="ap"),
             ResizeD(
@@ -185,11 +212,7 @@ def get_kasten_transforms(size=64, resolution=1.5):
                 mode="bilinear",
                 align_corners=True,
             ),
-            LambdaD(
-                keys={"ap"}, func=lambda t: einops.repeat(t, "1 m n -> 1 k m n", k=size)
-            ),
             ScaleIntensityD(keys={"ap"}),
-            # DataStatsD(keys='ap')
         ]
     )
     lat_transform = Compose(
@@ -199,8 +222,8 @@ def get_kasten_transforms(size=64, resolution=1.5):
                 ensure_channel_first=False,
                 dtype=np.float32,
                 simple_keys=True,
-                image_only=False,
-                reader=PILReader(converter=None),
+                image_only=True,  # no meta needed for 2D LAT
+                reader=PILReader(converter=pil_convert_L),
             ),
             EnsureChannelFirstD(keys="lat"),
             ResizeD(
@@ -210,12 +233,7 @@ def get_kasten_transforms(size=64, resolution=1.5):
                 mode="bilinear",
                 align_corners=True,
             ),
-            LambdaD(
-                keys={"lat"},
-                func=lambda t: einops.repeat(t, "1 m n -> 1 m n k", k=size),
-            ),
             ScaleIntensityD(keys={"lat"}),
-            # DataStatsD(keys='lat')
         ]
     )
     seg_transform = Compose(
@@ -225,7 +243,7 @@ def get_kasten_transforms(size=64, resolution=1.5):
                 ensure_channel_first=True,
                 dtype=np.float32,
                 simple_keys=True,
-                image_only=False,
+                image_only=False,  # keep meta for Spacing/Orientation
             ),
             OrientationD(keys={"seg"}, axcodes="PIR"),
             SpacingD(
@@ -236,8 +254,7 @@ def get_kasten_transforms(size=64, resolution=1.5):
             ),
             ResizeWithPadOrCropD(keys={"seg"}, spatial_size=(size, size, size)),
             ThresholdIntensityD(keys="seg", threshold=0.5, above=False, cval=1.0),
-            # DataStatsD(keys='seg')
         ]
     )
-    return {"ap": ap_transform, "lat": lat_transform, "seg": seg_transform}
+    return Compose([ap_transform, lat_transform, seg_transform])
 
