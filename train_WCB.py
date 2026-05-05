@@ -18,8 +18,17 @@ from monai.losses.dice import DiceCELoss
 from XrayTo3DShape import BaseDataset, get_kasten_transforms
 
 import mlflow
+from torch.cuda.amp import autocast, GradScaler
+
+EXPERIMENT_NAME = "test"
 mlflow.set_tracking_uri("http://localhost:5000")
-mlflow.set_experiment("my-first-experiment")
+mlflow.set_experiment(EXPERIMENT_NAME)
+
+# IMPORTANT: Enable system metrics monitoring 
+# pip install psutil
+# pip install nvidia-ml-py / pip install pyrsmi
+mlflow.config.enable_system_metrics_logging()
+mlflow.config.set_system_metrics_sampling_interval(1)
 
 def parse_training_arguments():
     parser = argparse.ArgumentParser()
@@ -42,7 +51,8 @@ if __name__ == "__main__":
         print("[Warning] Could not change thread settings; continuing with defaults.")
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
+    print("GPU available:", torch.cuda.is_available())
+    print("CUDA device:", torch.cuda.get_device_name(0))
 
     args = parse_training_arguments()
     print(sys.argv)
@@ -51,7 +61,7 @@ if __name__ == "__main__":
     # Save arguments as variables
     train_paths = args.trainpaths
     val_paths = args.valpaths
-    BATCH_SIZE = args.batch_size
+    batch_size = args.batch_size
     lr = args.lr
     depth = args.depth
 
@@ -66,14 +76,14 @@ if __name__ == "__main__":
 
     train_loader = ThreadDataLoader(
         train_ds,
-        batch_size=BATCH_SIZE,
+        batch_size=batch_size,
         shuffle=True,
         num_workers=0,
         pin_memory=True,
     )
     val_loader = ThreadDataLoader(
         val_ds,
-        batch_size=BATCH_SIZE,
+        batch_size=batch_size,
         shuffle=False,
         num_workers=0,
         pin_memory=True,
@@ -85,9 +95,12 @@ if __name__ == "__main__":
 
     with mlflow.start_run():
         # Log the hyperparameters
-        mlflow.log_param("batch_size", BATCH_SIZE)
+        mlflow.log_param("batch_size", batch_size)
         mlflow.log_param("lr", lr)
         mlflow.log_param("depth", depth)
+
+        mlflow.log_input()
+
         config_attunet = {
             "in_channels": 2,
             "out_channels": 1,
@@ -95,6 +108,14 @@ if __name__ == "__main__":
             "strides": (2, 2, 2),
         }
         model = AttentionUnet(spatial_dims=3, **config_attunet).to(device)
+        print("Model device:", next(model.parameters()).device)
+
+        optimizer = torch.optim.AdamW(model.parameters(), lr)
+
+        # mixed precision scaler
+        scaler = GradScaler()
+
+
 
 
 
