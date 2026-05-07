@@ -140,6 +140,8 @@ if __name__ == "__main__":
         # mixed precision scaler
         scaler = GradScaler()
 
+        best_acc = -1.0
+        best_ckpt_path = None
         # TODO: skip writing to checkpoint directory for now (do later)
         for epoch in range(num_epochs):
             epoch_start = time.perf_counter()
@@ -217,7 +219,7 @@ if __name__ == "__main__":
             if (epoch) % checkpoint_freq == 0:
                 # Save full checkpoint dict the same way as manual version
                 ckpt = {
-                    "epoch": epoch + 1,
+                    "epoch": epoch,
                     "model_state": model.state_dict(),
                     "optimizer_state": optimizer.state_dict(),
                     "scaler_state": scaler.state_dict(),
@@ -243,5 +245,24 @@ if __name__ == "__main__":
                 print(f"Saved checkpoint: epoch {epoch}")
 
             print(f"epoch {epoch} train_loss {train_loss:.4f} dice {acc:.4f} time {epoch_time:.2f}s")
+
+            if acc > best_acc:
+                best_acc = acc
+                best_ckpt = {
+                    "epoch": epoch,
+                    "model_state": model.state_dict(),
+                    "optimizer_state": optimizer.state_dict(),
+                    "scaler_state": scaler.state_dict(),
+                    "train_loss": train_loss,
+                    "val_dice": acc,
+                    "config": {"attunet": config_attunet, "lr": lr, "batch_size": batch_size},
+                    "device": str(device),
+                }
+                best_ckpt_path = f"best-epoch.pth"
+                torch.save(best_ckpt, best_ckpt_path)
+                mlflow.log_artifact(best_ckpt_path, artifact_path="checkpoints")
+                os.remove(best_ckpt_path)
+                print(f"Saved new best checkpoint.")
+
 
 

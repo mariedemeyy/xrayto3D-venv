@@ -59,8 +59,8 @@ def main(lr, depth, run_timestamp, run_dir):
     if WANDB_ON:
         wandb.init(project="pipeline-test-01", name="attentionUnet-01")
 
-    paths_location = "/home/mdemey/projects/pelvis/pelvis-net/training/data/DRR_10"
-    paths_location_csv = os.path.join(paths_location, "drr_dataset.csv")
+    paths_location = "/home/mdemey/projects/pelvis/pelvis-net/data/DRR_10"
+    paths_location_csv = os.path.join(paths_location, "drr_dataset_train.csv")
 
     paths = pd.read_csv(paths_location_csv, index_col=0).to_numpy()
     paths = [{"ap": os.path.join(paths_location, ap), "lat": os.path.join(paths_location, lat), "seg": os.path.join(paths_location, seg)} for ap, lat, seg in paths]
@@ -75,6 +75,7 @@ def main(lr, depth, run_timestamp, run_dir):
     print(transform)
 
     # Cache once (first epoch/build), then fast
+    print(train_paths)
     train_ds = CacheDataset(data=train_paths, transform=transform, cache_rate=1.0, num_workers=0)
     val_ds = CacheDataset(data=val_paths, transform=transform, cache_rate=1.0, num_workers=0)
     test_ds = CacheDataset(data=test_paths, transform=transform, cache_rate=1.0, num_workers=0)
