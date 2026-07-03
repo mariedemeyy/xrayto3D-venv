@@ -20,19 +20,41 @@ from monai.data import CacheDataset, ThreadDataLoader  # use MONAI caching + thr
 import wandb
 from XrayTo3DShape import BaseDataset, get_kasten_transforms
 from torch.cuda.amp import autocast, GradScaler
+import random
+import numpy as np
 
-NUM_EPOCHS = 100
+def dir_path(string):
+    if os.path.isdir(string):
+        return string
+    else:
+        raise NotADirectoryError(string)
+    
+parser = argparse.ArgumentParser()
+parser.add_argument('--path', type=dir_path)
+parser.add_argument("--batch_size", type=int, choices=[4, 8])
+args = parser.parse_args()
+batch_size = args.batch_size
+data_path = args.path
+
+SEED = 42
+NUM_EPOCHS = 3
 WANDB_ON = False
 TEST_ZERO_INPUT = False
-BATCH_SIZE = 4
+BATCH_SIZE = batch_size
 NUM_WORKERS = 4
 PERSISTENT_WORKERS = True
 PRE_FETCH_FACTOR = 2
 PIN_MEMORY = True
 TEST_SIZE = 0.1  # fraction for test split
 VAL_SIZE = 0.1  # fraction for validation split
-CHECKPOINT_DIR = "checkpoints"  # <-- add this
+CHECKPOINT_DIR = "training/checkpoints"
 
+random.seed(SEED)
+np.random.seed(SEED)
+torch.manual_seed(SEED)
+torch.cuda.manual_seed_all(SEED)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
 dice_metric_evaluator = DiceMetric(include_background=False)
 hd95_metric_evaluator = HausdorffDistanceMetric(include_background=False, percentile=95)
 asd_metric_evaluator = SurfaceDistanceMetric(include_background=False)
@@ -59,23 +81,20 @@ def main(lr, depth, run_timestamp, run_dir):
     if WANDB_ON:
         wandb.init(project="pipeline-test-01", name="attentionUnet-01")
 
-    paths_location = "/home/mdemey/projects/pelvis/pelvis-net/data/DRR_10"
-    paths_location_csv = os.path.join(paths_location, "drr_dataset_train.csv")
+    paths_location = data_path
+    paths_location_csv = os.path.join(paths_location, "drr_dataset.csv")
 
     paths = pd.read_csv(paths_location_csv, index_col=0).to_numpy()
     paths = [{"ap": os.path.join(paths_location, ap), "lat": os.path.join(paths_location, lat), "seg": os.path.join(paths_location, seg)} for ap, lat, seg in paths]
 
     # split into train / other
-    train_paths, other_paths = train_test_split(paths, test_size=TEST_SIZE + VAL_SIZE, random_state=42) # save 20% of data for val/test
-    val_paths, test_paths = train_test_split(other_paths, test_size=0.5, random_state=42) # split val/test data in half
+    train_paths, other_paths = train_test_split(paths, test_size=TEST_SIZE + VAL_SIZE, random_state=SEED) # save 20% of data for val/test
+    val_paths, test_paths = train_test_split(other_paths, test_size=0.5, random_state=SEED) # split val/test data in half
     
     # create datasets / loaders
     transform = get_kasten_transforms(size=128, resolution=2.734375)
-    print(type(transform))
-    print(transform)
 
-    # Cache once (first epoch/build), then fast
-    print(train_paths)
+
     train_ds = CacheDataset(data=train_paths, transform=transform, cache_rate=1.0, num_workers=0)
     val_ds = CacheDataset(data=val_paths, transform=transform, cache_rate=1.0, num_workers=0)
     test_ds = CacheDataset(data=test_paths, transform=transform, cache_rate=1.0, num_workers=0)
@@ -270,9 +289,11 @@ if __name__ == "__main__":
     
     run_timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     run_dir = os.path.join(CHECKPOINT_DIR, run_timestamp)
-    learning_rates = [1e-3]
-    depths = [(16, 32, 64, 128)]
-
+    learning_rates = [1e-2, 1e-3, 1e-4]
+    depths = [
+    (8, 16, 32),
+    (8, 16, 32, 64),
+    (16, 32, 64, 128)]
     for lr in learning_rates: 
         print(f"------------- Testing Learning Rate : {lr:.4f} -------------")
         for depth in depths: 
@@ -317,18 +338,19 @@ if __name__ == "__main__":
     # Find the overall best runs
     best_loss_row = summary.loc[summary["best_val_loss"].idxmin()]
     best_dice_row = summary.loc[summary["best_dice"].idxmax()]
-
-    print("===== SUMMARY OF ALL RUNS =====")
-    print(summary.sort_values(by=["architecture", "lr"]).to_string(index=False))
-    print("\n===== BEST MODELS =====")
-    print(f"Lowest Validation Loss:\n {best_loss_row.to_dict()}\n")
-    print(f"Highest Dice Score:\n {best_dice_row.to_dict()}")
-
-    # for the file with the best loss, run the checkpoint on the test data and get the performance metrics!
-
-    # for the file with the best loss, run the checkpoint on the test data and get the performance metrics!
+    output_file = os.path.join(run_dir, "output.txt")
+    with open(output_file, "a") as f:
+        print("=====    DATA LOCATION    =====", file=f)
+        print(data_path, file=f)
+        print("=====      BATCH SIZE     =====", file=f)
+        print(BATCH_SIZE, file=f)
+        print("===== SUMMARY OF ALL RUNS =====", file=f)
+        print(summary.sort_values(by=["architecture", "lr"]).to_string(index=False), file=f)
+        print("\n===== BEST MODELS =====", file=f)
+        print(f"Lowest Validation Loss:\n {best_loss_row.to_dict()}\n", file=f)
+        print(f"Highest Dice Score:\n {best_dice_row.to_dict()}", file=f)
+    
     print("\n===== TESTING BEST MODEL (by lowest validation loss) =====")
-
     best_model_path = os.path.join(run_dir, best_loss_row["file"].replace("training_log", "attunet_best").replace(".csv", ".pth"))
     if not os.path.exists(best_model_path):
         print(f"[Warning] Best model checkpoint not found at {best_model_path}. Trying to infer location...")
