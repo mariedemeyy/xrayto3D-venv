@@ -1,0 +1,22 @@
+=====    DATA LOCATION    =====
+data/recon/inputs/DRR_All_no_bone_algo
+=====      BATCH SIZE     =====
+8
+===== SUMMARY OF ALL RUNS =====
+                        file architecture    lr  best_val_loss  epoch_val_loss  best_dice  epoch_dice
+ training_log_0001_large.csv        large 0.001       0.632244              50   0.525379          41
+ training_log_0010_large.csv        large 0.010       0.457076              45   0.543440          45
+ training_log_0100_large.csv        large 0.100       0.473345              36   0.526734          36
+training_log_0001_medium.csv       medium 0.001       0.849402              50   0.450007          49
+training_log_0010_medium.csv       medium 0.010       0.466102              40   0.535706          40
+training_log_0100_medium.csv       medium 0.100       0.478349              37   0.521710          37
+ training_log_0001_small.csv        small 0.001       0.866195              50   0.260037          48
+ training_log_0010_small.csv        small 0.010       0.523376              42   0.478493          42
+ training_log_0100_small.csv        small 0.100       0.533305              48   0.466860          48
+
+===== BEST MODELS =====
+Lowest Validation Loss:
+ {'file': 'training_log_0010_large.csv', 'architecture': 'large', 'lr': 0.01, 'best_val_loss': 0.4570756604973699, 'epoch_val_loss': 45, 'best_dice': 0.5434404015541077, 'epoch_dice': 45}
+
+Highest Dice Score:
+ {'file': 'training_log_0010_large.csv', 'architecture': 'large', 'lr': 0.01, 'best_val_loss': 0.4570756604973699, 'epoch_val_loss': 45, 'best_dice': 0.5434404015541077, 'epoch_dice': 45}
